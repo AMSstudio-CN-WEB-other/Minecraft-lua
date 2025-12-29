@@ -1,72 +1,42 @@
 -- /system/desktop.lua
--- Folder-based App Desktop for CC:Tweaked (Advanced Computer recommended)
+-- CCT Desktop (stable, folder browsing, mouse control, no unicode, graceful terminate)
 
 term.setBackgroundColor(colors.black)
 term.setTextColor(colors.white)
 
 local w, h = term.getSize()
-local listTop = 3
+local listTop = 4
 local listBottom = h - 2
 local visible = listBottom - listTop + 1
 
-local scroll = 0
-local selected = 1
 local current = "/apps"
+local scroll, selected = 0, 1
 
 local function clamp(v, a, b) return math.max(a, math.min(b, v)) end
-
 local function isLua(name) return name:match("%.lua$") ~= nil end
 
 local function getEntries(path)
   if not fs.exists(path) then fs.makeDir(path) end
+
   local items = fs.list(path)
-  local folders, files = {}, {}
+  local dirs, apps = {}, {}
 
   for _, it in ipairs(items) do
     local full = fs.combine(path, it)
     if fs.isDir(full) then
-      table.insert(folders, {name = it, full = full, kind = "dir"})
+      table.insert(dirs, {kind="dir", name=it, full=full})
     elseif isLua(it) then
-      table.insert(files, {name = it:gsub("%.lua$", ""), file = it, full = full, kind = "lua"})
+      table.insert(apps, {kind="lua", name=it:gsub("%.lua$", ""), full=full})
     end
   end
 
-  table.sort(folders, function(a,b) return a.name:lower() < b.name:lower() end)
-  table.sort(files, function(a,b) return a.name:lower() < b.name:lower() end)
+  table.sort(dirs, function(a,b) return a.name:lower() < b.name:lower() end)
+  table.sort(apps, function(a,b) return a.name:lower() < b.name:lower() end)
 
-  local entries = {}
-  for _, f in ipairs(folders) do table.insert(entries, f) end
-  for _, f in ipairs(files) do table.insert(entries, f) end
-
-  return entries
-end
-
-local function drawHeader(path, count)
-  term.setBackgroundColor(colors.blue)
-  term.setTextColor(colors.white)
-  term.setCursorPos(1,1)
-  term.write(string.rep(" ", w))
-
-  term.setCursorPos(2,1)
-  term.write("< Back")
-
-  term.setCursorPos(10,1)
-  term.write("CCT Desktop")
-
-  term.setCursorPos(22,1)
-  term.write(path)
-
-  term.setCursorPos(w-10,1)
-  term.write("Items:"..count)
-end
-
-local function drawFooter()
-  term.setBackgroundColor(colors.black)
-  term.setTextColor(colors.lightGray)
-  term.setCursorPos(1,h)
-  term.write(string.rep(" ", w))
-  term.setCursorPos(2,h)
-  term.write("Click folder to enter | Click app to run | Scroll | Q quit")
+  local out = {}
+  for _, d in ipairs(dirs) do table.insert(out, d) end
+  for _, a in ipairs(apps) do table.insert(out, a) end
+  return out
 end
 
 local function clear()
@@ -75,18 +45,52 @@ local function clear()
   term.clear()
 end
 
+local function drawHeader(count)
+  term.setBackgroundColor(colors.blue)
+  term.setTextColor(colors.white)
+  term.setCursorPos(1,1)
+  term.write(string.rep(" ", w))
+
+  term.setCursorPos(2,1)
+  term.write("[Back]")
+
+  term.setCursorPos(10,1)
+  term.write("CCT Desktop")
+
+  term.setCursorPos(22,1)
+  term.write(current)
+
+  local exitLabel = "[Exit]"
+  term.setCursorPos(w - #exitLabel - 1, 1)
+  term.write(exitLabel)
+
+  term.setBackgroundColor(colors.black)
+  term.setTextColor(colors.lightGray)
+  term.setCursorPos(1,2)
+  term.write(string.rep(" ", w))
+  term.setCursorPos(2,2)
+  term.write("Click folder to enter | Click app to run | Scroll | Q quit")
+end
+
+local function drawFooter()
+  term.setBackgroundColor(colors.black)
+  term.setTextColor(colors.lightGray)
+  term.setCursorPos(1,h)
+  term.write(string.rep(" ", w))
+  term.setCursorPos(2,h)
+  term.write("Up/Down select | Enter run | Backspace up")
+end
+
 local function drawList(entries)
-  -- list background
   term.setBackgroundColor(colors.gray)
-  for y=2,h-1 do
+  for y=3,h-1 do
     term.setCursorPos(1,y)
     term.write(string.rep(" ", w))
   end
 
-  -- title row
   term.setBackgroundColor(colors.gray)
   term.setTextColor(colors.black)
-  term.setCursorPos(2,2)
+  term.setCursorPos(2,3)
   term.write("Folders & Apps")
 
   for i=1,visible do
@@ -101,11 +105,12 @@ local function drawList(entries)
     if idx <= #entries then
       local e = entries[idx]
       local label
+
       if e.kind == "dir" then
-        label = "📁 "..e.name
+        label = "[DIR] " .. e.name
         term.setTextColor(colors.yellow)
       else
-        label = "▶ "..e.name
+        label = "[APP] " .. e.name
         term.setTextColor(colors.lime)
       end
 
@@ -116,16 +121,16 @@ local function drawList(entries)
         term.setBackgroundColor(colors.gray)
       end
 
+      if #label > w-3 then label = label:sub(1, w-6) .. "..." end
       term.setCursorPos(2,y)
-      if #label > w-3 then label = label:sub(1, w-6).."..." end
       term.write(label)
     end
   end
 end
 
-local function draw(path, entries)
+local function redraw(entries)
   clear()
-  drawHeader(path, #entries)
+  drawHeader(#entries)
   drawList(entries)
   drawFooter()
 end
@@ -133,89 +138,115 @@ end
 local function goUp()
   if current == "/apps" then return end
   local parent = fs.getDir(current)
-  if parent == "" then parent = "/" end
+  if parent == "" then parent = "/apps" end
   current = parent
   scroll, selected = 0, 1
 end
 
-local function enter(entries)
-  if #entries == 0 then return end
-  local e = entries[selected]
-  if e.kind == "dir" then
-    current = e.full
+local function runEntry(entry)
+  if entry.kind == "dir" then
+    current = entry.full
     scroll, selected = 0, 1
-  else
-    -- run lua app
-    term.setBackgroundColor(colors.black)
-    term.setTextColor(colors.white)
-    term.clear()
-    term.setCursorPos(1,1)
+    return
+  end
 
-    if multishell and multishell.launch then
-      multishell.launch({}, e.full)
-    else
-      shell.run(e.full)
-    end
+  -- run lua app
+  term.setBackgroundColor(colors.black)
+  term.setTextColor(colors.white)
+  term.clear()
+  term.setCursorPos(1,1)
+
+  if multishell and multishell.launch then
+    multishell.launch({}, entry.full)
+  else
+    shell.run(entry.full)
   end
 end
 
-local function clickBack(x,y)
-  return y == 1 and x >= 2 and x <= 7
+local function backClicked(x,y)
+  return y == 1 and x >= 2 and x <= 7  -- [Back]
 end
 
-local function main()
-  if not fs.exists("/apps") then fs.makeDir("/apps") end
+local function exitClicked(x,y)
+  local label = "[Exit]"
+  local x1 = w - #label - 1
+  local x2 = w - 1
+  return y == 1 and x >= x1 and x <= x2
+end
 
-  while true do
-    local entries = getEntries(current)
-    selected = clamp(selected, 1, math.max(1, #entries))
-    scroll = clamp(scroll, 0, math.max(0, #entries - visible))
+-- MAIN LOOP
+if not fs.exists("/apps") then fs.makeDir("/apps") end
 
-    draw(current, entries)
+local running = true
+while running do
+  local entries = getEntries(current)
+  selected = clamp(selected, 1, math.max(1, #entries))
+  scroll = clamp(scroll, 0, math.max(0, #entries - visible))
 
-    local ev, p1, x, y = os.pullEvent()
+  redraw(entries)
 
-    if ev == "mouse_scroll" then
-      if p1 == 1 then
-        scroll = clamp(scroll+1, 0, math.max(0, #entries - visible))
-      else
-        scroll = clamp(scroll-1, 0, math.max(0, #entries - visible))
-      end
+  -- IMPORTANT: use pullEventRaw so terminate does not auto-error (no red "Terminated")
+  local ev, a, b, c = os.pullEventRaw()
 
-    elseif ev == "mouse_click" then
-      if clickBack(x,y) then
-        goUp()
-      elseif y >= listTop and y <= listBottom then
-        local idx = scroll + (y - listTop + 1)
-        if idx >= 1 and idx <= #entries then
-          selected = idx
-          -- left click to open/run
-          if p1 == 1 then
-            enter(entries)
-          end
+  if ev == "terminate" then
+    -- graceful exit
+    break
+  end
+
+  if ev == "mouse_scroll" then
+    local dir = a
+    if dir == 1 then
+      scroll = clamp(scroll + 1, 0, math.max(0, #entries - visible))
+    else
+      scroll = clamp(scroll - 1, 0, math.max(0, #entries - visible))
+    end
+
+  elseif ev == "mouse_click" then
+    local btn, x, y = a, b, c
+
+    if exitClicked(x,y) then
+      running = false
+
+    elseif backClicked(x,y) then
+      goUp()
+
+    elseif y >= listTop and y <= listBottom then
+      local idx = scroll + (y - listTop + 1)
+      if idx >= 1 and idx <= #entries then
+        selected = idx
+        if btn == 1 then
+          runEntry(entries[selected])
         end
       end
+    end
 
-    elseif ev == "key" then
-      if p1 == keys.q then
-        term.setBackgroundColor(colors.black)
-        term.setTextColor(colors.white)
-        term.clear()
-        term.setCursorPos(1,1)
-        return
-      elseif p1 == keys.up then
-        selected = clamp(selected-1, 1, math.max(1, #entries))
-        if selected < scroll+1 then scroll = selected-1 end
-      elseif p1 == keys.down then
-        selected = clamp(selected+1, 1, math.max(1, #entries))
-        if selected > scroll+visible then scroll = selected-visible end
-      elseif p1 == keys.enter then
-        enter(entries)
-      elseif p1 == keys.backspace then
-        goUp()
+  elseif ev == "key" then
+    local key = a
+
+    if key == keys.q then
+      running = false
+
+    elseif key == keys.up then
+      selected = clamp(selected - 1, 1, math.max(1, #entries))
+      if selected < scroll + 1 then scroll = selected - 1 end
+
+    elseif key == keys.down then
+      selected = clamp(selected + 1, 1, math.max(1, #entries))
+      if selected > scroll + visible then scroll = selected - visible end
+
+    elseif key == keys.enter then
+      if #entries > 0 then
+        runEntry(entries[selected])
       end
+
+    elseif key == keys.backspace then
+      goUp()
     end
   end
 end
 
-main()
+-- Clean exit (important)
+term.setBackgroundColor(colors.black)
+term.setTextColor(colors.white)
+term.clear()
+term.setCursorPos(1,1)
