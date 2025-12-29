@@ -52,13 +52,26 @@ local function getRunningTabs()
   if not multishell then return {} end
   local tabs = {}
   local count = multishell.getCount()
-  for i=1,count do
-    local id = multishell.getTab(i)
-    if id and id ~= desktopTab then
-      local title = multishell.getTitle(id) or ("Tab "..tostring(id))
-      table.insert(tabs, {id=id, title=title})
+
+  for i = 1, count do
+    local id = i
+
+    -- Some versions have getTab(i). If not, tab id == i.
+    if multishell.getTab then
+      local ok, val = pcall(multishell.getTab, i)
+      if ok and val then id = val end
+    end
+
+    if id ~= desktopTab then
+      local title = "Tab " .. tostring(id)
+      if multishell.getTitle then
+        local ok2, t = pcall(multishell.getTitle, id)
+        if ok2 and t and #t > 0 then title = t end
+      end
+      table.insert(tabs, {id = id, title = title})
     end
   end
+
   return tabs
 end
 
