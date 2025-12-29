@@ -1,27 +1,29 @@
--- install.lua (run this on a CC:Tweaked computer)
-local repo = "https://raw.githubusercontent.com/AMSstudio-CN-WEB-other/Minecraft-lua/main/"
+-- install.lua
+-- Installer for CCT Desktop System
+local base = "https://raw.githubusercontent.com/AMSstudio-CN-WEB-other/Minecraft-lua/main/"
 
-local function fetch(path, saveAs)
-  if fs.exists(saveAs) then fs.delete(saveAs) end
-  local url = repo .. path
+local function fetch(remotePath, savePath)
+  if fs.exists(savePath) then fs.delete(savePath) end
+  local url = base .. remotePath
   print("Downloading: " .. url)
-  local ok, err = pcall(function()
-    shell.run("wget", url, saveAs)
-  end)
-  if not ok then error(err) end
+  shell.run("wget", "-f", url, savePath)
+  if not fs.exists(savePath) then
+    error("Failed to download: " .. remotePath)
+  end
 end
 
-print("== Installing Desktop System ==")
+print("== Installing CCT Desktop System ==")
+
 if not fs.exists("/system") then fs.makeDir("/system") end
 if not fs.exists("/apps") then fs.makeDir("/apps") end
 
 fetch("system/desktop.lua", "/system/desktop.lua")
 
--- Optional: startup
-local startup = [[shell.run("/system/desktop.lua")]]
+-- Write startup.lua to auto boot into desktop
 local f = fs.open("/startup.lua", "w")
-f.write(startup)
+f.write([[shell.run("/system/desktop.lua")]])
 f.close()
 
 print("Done!")
-print("Run: /system/desktop.lua")
+print("Desktop installed at /system/desktop.lua")
+print("Reboot to start automatically, or run: lua /system/desktop.lua")
