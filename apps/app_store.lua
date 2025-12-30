@@ -1,10 +1,5 @@
--- App Store for CC:Tweaked / ComputerCraft (supports subdirectories)
--- Reads remote app list from GitHub and allows install/uninstall to local /apps
--- Remote index: /apps/index.txt where each line is a relative path under /apps
--- Example lines:
---   music_player.lua
---   games/dodge.lua
---   utils/something.lua
+-- App Store for CC:Tweaked / ComputerCraft
+-- Supports subdirectories under /apps and provides Install / Update / Delete.
 
 local REPO_USER = "Ace-2778"
 local REPO_NAME = "Minecraft-lua"
@@ -15,12 +10,10 @@ local INDEX_URL = ("https://raw.githubusercontent.com/%s/%s/%s/apps/index.txt")
   :format(REPO_USER, REPO_NAME, BRANCH)
 
 local function remoteUrl(relPath)
-  -- relPath is like "music_player.lua" or "games/dodge.lua"
   return ("https://raw.githubusercontent.com/%s/%s/%s/apps/%s")
     :format(REPO_USER, REPO_NAME, BRANCH, relPath)
 end
 
--- Ensure apps dir exists
 if not fs.exists(APPS_DIR) then fs.makeDir(APPS_DIR) end
 
 -- ---------- Utilities ----------
@@ -58,15 +51,14 @@ local function deleteLocal(relPath)
   return false
 end
 
-local function wgetToLocal(relPath)
+local function downloadToLocal(relPath)
   local url = remoteUrl(relPath)
   local dst = localPath(relPath)
 
   ensureParentDirs(dst)
 
   if fs.exists(dst) then fs.delete(dst) end
-  local ok = shell.run("wget", url, dst)
-  return ok
+  return shell.run("wget", url, dst)
 end
 
 -- ---------- Fetch remote index ----------
@@ -94,7 +86,6 @@ local function parseIndex(txt)
   for line in txt:gmatch("[^\r\n]+") do
     line = trim(line)
     if line ~= "" and not line:match("^#") then
-      -- normalize: remove leading "apps/" if user accidentally puts it
       line = line:gsub("^apps/", "")
       table.insert(list, line)
     end
@@ -141,10 +132,10 @@ local function writeAt(x,y,text,fg,bg)
   term.write(text)
 end
 
-local function button(x,y,label,active)
+local function button(x,y,label,enabled)
   local bw = #label + 2
   term.setCursorPos(x,y)
-  term.setBackgroundColor(active and colors.lime or colors.gray)
+  term.setBackgroundColor(enabled and colors.lime or colors.gray)
   term.setTextColor(colors.black)
   term.write(" "..label.." ")
   return bw
@@ -154,7 +145,7 @@ local function inside(px,py,x,y,bw,bh)
   return px>=x and px<x+bw and py>=y and py<y+bh
 end
 
--- ---------- App store state ----------
+-- ---------- State ----------
 local statusMsg = ""
 local remoteApps = {}
 local selected = 1
@@ -165,27 +156,17 @@ local listY1 = 6
 local listX2 = math.floor(w*0.62)
 local listH  = h - 8
 if listH < 5 then listH = 5 end
-
 local rightX  = listX2 + 2
 
-local function setStatus(msg)
-  statusMsg = msg or ""
-end
-
-local function shortName(path)
-  -- display only file name but keep path for install
-  local name = path:match("([^/]+)$") or path
-  return name
-end
+local function setStatus(msg) statusMsg = msg or "" end
 
 local function drawUI()
   clear(colors.black)
 
-  -- Header
   drawBox(1,1,w,3,colors.blue)
-  centerText(2,"🛒 App Store (GitHub) - Subdir Support",colors.white,colors.blue)
+  centerText(2,"🛒 App Store (Install / Update / Delete)",colors.white,colors.blue)
 
-  writeAt(2,4,"Remote apps (from /apps/index.txt, supports subfolders)",colors.yellow,colors.black)
+  writeAt(2,4,"Remote list: /apps/index.txt (supports subfolders)",colors.yellow,colors.black)
 
   drawBox(1,5,listX2+1,h-2,colors.black)
 
@@ -195,13 +176,10 @@ local function drawUI()
   for i=1,listH do
     local idx = i + scroll
     local y = listY1 + i - 1
-    term.setCursorPos(listX1,y)
-
     local rel = remoteApps[idx] or ""
     local installed = rel ~= "" and existsLocal(rel)
 
     local lineW = (listX2 - listX1 + 1)
-
     local show = rel
     if #show > lineW - 12 then
       show = show:sub(1, lineW - 15) .. "..."
@@ -215,12 +193,12 @@ local function drawUI()
       term.setTextColor(colors.white)
     end
 
+    term.setCursorPos(listX1,y)
     term.write(string.rep(" ", lineW))
     term.setCursorPos(listX1,y)
 
     if rel ~= "" then
       term.write(show)
-
       local tag = installed and "[Installed]" or "[Remote]"
       term.setCursorPos(listX2 - #tag + 1, y)
       term.setTextColor(installed and colors.lime or colors.lightGray)
@@ -230,33 +208,35 @@ local function drawUI()
 
   -- Right panel
   drawBox(rightX,4,w,h-2,colors.black)
-
   local cur = remoteApps[selected]
+  local installed = cur and existsLocal(cur)
 
   writeAt(rightX,5,"Selected:",colors.cyan,colors.black)
   writeAt(rightX,6,cur or "(none)",colors.white,colors.black)
 
-  local installed = cur and existsLocal(cur)
-
   writeAt(rightX,8,"Actions:",colors.cyan,colors.black)
-
   local bx = rightX
   local by = 10
 
-  local labelInstall = installed and "Uninstall" or "Install"
-  button(bx,by,labelInstall,true)
-  button(bx,by+2,"Run",cur and installed)
-  button(bx,by+4,"Refresh",true)
+  -- Buttons (enabled states)
+  local canInstall = cur ~= nil and not installed
+  local canUpdate  = cur ~= nil and installed
+  local canDelete  = cur ~= nil and installed
 
-  writeAt(rightX,by+6,"Notes:",colors.cyan,colors.black)
-  writeAt(rightX,by+7,"- Click list to select",colors.lightGray,colors.black)
-  writeAt(rightX,by+8,"- Mouse wheel scroll",colors.lightGray,colors.black)
-  writeAt(rightX,by+9,"- Enter runs selected",colors.lightGray,colors.black)
+  local wInstall = button(bx, by,   "Install", canInstall)
+  local wUpdate  = button(bx, by+2, "Update",  canUpdate)
+  local wDelete  = button(bx, by+4, "Delete",  canDelete)
+  local wRefresh = button(bx, by+6, "Refresh", true)
 
-  -- Footer
+  writeAt(rightX, by+8, "Tips:", colors.cyan, colors.black)
+  writeAt(rightX, by+9, "- Click app to select", colors.lightGray, colors.black)
+  writeAt(rightX, by+10,"- Mouse wheel scroll", colors.lightGray, colors.black)
+  writeAt(rightX, by+11,"- Q to quit", colors.lightGray, colors.black)
+
+  -- Footer status
   drawBox(1,h-1,w,h-1,colors.gray)
   writeAt(2,h-1,statusMsg,colors.black,colors.gray)
-  writeAt(w-20,h-1,"Q:Quit  Enter:Run",colors.black,colors.gray)
+  writeAt(w-16,h-1,"Q:Quit",colors.black,colors.gray)
 end
 
 local function refreshRemote()
@@ -282,41 +262,43 @@ local function refreshRemote()
   scroll = 0
 end
 
-local function doInstallOrUninstall()
+local function doInstall()
   local app = remoteApps[selected]
   if not app then return end
-
   if existsLocal(app) then
-    setStatus("Uninstalling "..app.." ...")
-    drawUI()
-    deleteLocal(app)
-    setStatus("Uninstalled: "..app)
-  else
-    setStatus("Installing "..app.." ...")
-    drawUI()
-    local ok = wgetToLocal(app)
-    if ok then
-      setStatus("Installed: "..app)
-    else
-      setStatus("ERROR: Install failed (wget).")
-    end
+    setStatus("Already installed.")
+    return
   end
+  setStatus("Installing "..app.." ...")
+  drawUI()
+  local ok = downloadToLocal(app)
+  if ok then setStatus("Installed: "..app) else setStatus("ERROR: Install failed.") end
 end
 
-local function runSelected()
+local function doUpdate()
   local app = remoteApps[selected]
   if not app then return end
   if not existsLocal(app) then
-    setStatus("Install it first.")
+    setStatus("Not installed.")
     return
   end
-
-  local path = localPath(app)
-  setStatus("Running "..app.." ... (Ctrl+T to stop)")
+  setStatus("Updating "..app.." ...")
   drawUI()
+  local ok = downloadToLocal(app)
+  if ok then setStatus("Updated: "..app) else setStatus("ERROR: Update failed.") end
+end
 
-  shell.run(path)
-  setStatus("Returned from "..app)
+local function doDelete()
+  local app = remoteApps[selected]
+  if not app then return end
+  if not existsLocal(app) then
+    setStatus("Not installed.")
+    return
+  end
+  setStatus("Deleting "..app.." ...")
+  drawUI()
+  deleteLocal(app)
+  setStatus("Deleted: "..app)
 end
 
 -- ---------- Start ----------
@@ -356,20 +338,19 @@ while true do
     local cur = remoteApps[selected]
     local installed = cur and existsLocal(cur)
 
-    local installW = (installed and #"Uninstall" or #"Install") + 2
-    if inside(x,y,bx,by,installW,1) then
-      doInstallOrUninstall()
-    end
+    local canInstall = cur ~= nil and not installed
+    local canUpdate  = cur ~= nil and installed
+    local canDelete  = cur ~= nil and installed
 
-    local runW = #"Run" + 2
-    if inside(x,y,bx,by+2,runW,1) then
-      if cur and installed then runSelected() else setStatus("Install it first.") end
-    end
+    local wInstall = #"Install" + 2
+    local wUpdate  = #"Update" + 2
+    local wDelete  = #"Delete" + 2
+    local wRefresh = #"Refresh" + 2
 
-    local refreshW = #"Refresh" + 2
-    if inside(x,y,bx,by+4,refreshW,1) then
-      refreshRemote()
-    end
+    if inside(x,y,bx,by,wInstall,1) and canInstall then doInstall() end
+    if inside(x,y,bx,by+2,wUpdate,1) and canUpdate then doUpdate() end
+    if inside(x,y,bx,by+4,wDelete,1) and canDelete then doDelete() end
+    if inside(x,y,bx,by+6,wRefresh,1) then refreshRemote() end
 
   elseif ev == "key" then
     local k = e[2]
@@ -382,8 +363,6 @@ while true do
     elseif k == keys.down then
       selected = clamp(selected + 1, 1, #remoteApps)
       if selected > scroll + listH then scroll = scroll + 1 end
-    elseif k == keys.enter then
-      runSelected()
     end
   end
 end
