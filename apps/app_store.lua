@@ -1,11 +1,16 @@
 -- App Store for CC:Tweaked / ComputerCraft
--- Supports subdirectories under /apps and provides Install / Update / Delete.
+-- Install / Update / Delete, supports subdirectories under /apps
+-- Index: https://raw.githubusercontent.com/<user>/<repo>/<branch>/apps/index.txt
+-- Each line is a relative path under /apps, e.g.:
+--   music_player.lua
+--   games/dodge.lua
 
 local REPO_USER = "Ace-2778"
 local REPO_NAME = "Minecraft-lua"
 local BRANCH    = "main"
 
-local APPS_DIR  = "apps"
+-- IMPORTANT: use absolute resolved path so it works no matter shell.dir()
+local APPS_DIR  = shell.resolve("apps")
 local INDEX_URL = ("https://raw.githubusercontent.com/%s/%s/%s/apps/index.txt")
   :format(REPO_USER, REPO_NAME, BRANCH)
 
@@ -27,11 +32,16 @@ local function readAll(path)
   return t
 end
 
-local function ensureParentDirs(path)
+local function ensureDir(path)
+  if path == "" or fs.exists(path) then return end
   local parent = fs.getDir(path)
-  if parent and parent ~= "" and not fs.exists(parent) then
-    fs.makeDir(parent)
-  end
+  if parent and parent ~= "" then ensureDir(parent) end
+  if not fs.exists(path) then fs.makeDir(path) end
+end
+
+local function ensureParentDirs(filePath)
+  local parent = fs.getDir(filePath)
+  if parent and parent ~= "" then ensureDir(parent) end
 end
 
 local function localPath(relPath)
@@ -72,7 +82,7 @@ local function fetchIndex()
     end
   end
 
-  local tmp = ".app_index_tmp"
+  local tmp = shell.resolve(".app_index_tmp")
   if fs.exists(tmp) then fs.delete(tmp) end
   local ok = shell.run("wget", INDEX_URL, tmp)
   if not ok then return nil end
@@ -86,7 +96,7 @@ local function parseIndex(txt)
   for line in txt:gmatch("[^\r\n]+") do
     line = trim(line)
     if line ~= "" and not line:match("^#") then
-      line = line:gsub("^apps/", "")
+      line = line:gsub("^apps/", "") -- tolerate "apps/xxx.lua"
       table.insert(list, line)
     end
   end
@@ -160,18 +170,32 @@ local rightX  = listX2 + 2
 
 local function setStatus(msg) statusMsg = msg or "" end
 
+local function safe(fn)
+  local ok, err = pcall(fn)
+  if not ok then
+    setStatus("ERROR: "..tostring(err))
+  end
+  return ok
+end
+
 local function drawUI()
   clear(colors.black)
 
   drawBox(1,1,w,3,colors.blue)
   centerText(2,"🛒 App Store (Install / Update / Delete)",colors.white,colors.blue)
 
-  writeAt(2,4,"Remote list: /apps/index.txt (supports subfolders)",colors.yellow,colors.black)
+  writeAt(2,4,"Remote: /apps/index.txt  | Local apps dir: "..APPS_DIR,colors.yellow,colors.black)
 
   drawBox(1,5,listX2+1,h-2,colors.black)
 
-  local maxScroll = math.max(0, #remoteApps - listH)
+  local count = #remoteApps
+  if count == 0 then
+    writeAt(2,6,"(No apps loaded. Click Refresh.)",colors.lightGray,colors.black)
+  end
+
+  local maxScroll = math.max(0, count - listH)
   scroll = clamp(scroll, 0, maxScroll)
+  selected = clamp(selected, 1, math.max(1, count))
 
   for i=1,listH do
     local idx = i + scroll
@@ -206,7 +230,6 @@ local function drawUI()
     end
   end
 
-  -- Right panel
   drawBox(rightX,4,w,h-2,colors.black)
   local cur = remoteApps[selected]
   local installed = cur and existsLocal(cur)
@@ -218,22 +241,15 @@ local function drawUI()
   local bx = rightX
   local by = 10
 
-  -- Buttons (enabled states)
   local canInstall = cur ~= nil and not installed
   local canUpdate  = cur ~= nil and installed
   local canDelete  = cur ~= nil and installed
 
-  local wInstall = button(bx, by,   "Install", canInstall)
-  local wUpdate  = button(bx, by+2, "Update",  canUpdate)
-  local wDelete  = button(bx, by+4, "Delete",  canDelete)
-  local wRefresh = button(bx, by+6, "Refresh", true)
+  button(bx, by,   "Install", canInstall)
+  button(bx, by+2, "Update",  canUpdate)
+  button(bx, by+4, "Delete",  canDelete)
+  button(bx, by+6, "Refresh", true)
 
-  writeAt(rightX, by+8, "Tips:", colors.cyan, colors.black)
-  writeAt(rightX, by+9, "- Click app to select", colors.lightGray, colors.black)
-  writeAt(rightX, by+10,"- Mouse wheel scroll", colors.lightGray, colors.black)
-  writeAt(rightX, by+11,"- Q to quit", colors.lightGray, colors.black)
-
-  -- Footer status
   drawBox(1,h-1,w,h-1,colors.gray)
   writeAt(2,h-1,statusMsg,colors.black,colors.gray)
   writeAt(w-16,h-1,"Q:Quit",colors.black,colors.gray)
@@ -246,59 +262,53 @@ local function refreshRemote()
   local txt = fetchIndex()
   if not txt then
     remoteApps = {}
-    selected = 1
-    scroll = 0
-    setStatus("ERROR: Unable to fetch index. Is HTTP enabled?")
+    selected, scroll = 1, 0
+    setStatus("ERROR: Can't fetch index. HTTP enabled?")
     return
   end
 
   remoteApps = parseIndex(txt)
-  if #remoteApps == 0 then
-    setStatus("No apps found in index.txt")
-  else
-    setStatus("Loaded "..#remoteApps.." app(s).")
-  end
-  selected = clamp(selected,1,math.max(1,#remoteApps))
-  scroll = 0
+  selected, scroll = 1, 0
+  setStatus("Loaded "..tostring(#remoteApps).." app(s).")
 end
 
 local function doInstall()
   local app = remoteApps[selected]
-  if not app then return end
-  if existsLocal(app) then
-    setStatus("Already installed.")
-    return
-  end
-  setStatus("Installing "..app.." ...")
-  drawUI()
-  local ok = downloadToLocal(app)
-  if ok then setStatus("Installed: "..app) else setStatus("ERROR: Install failed.") end
+  if not app then setStatus("No app selected.") return end
+  if existsLocal(app) then setStatus("Already installed.") return end
+
+  safe(function()
+    setStatus("Installing "..app.." ...")
+    drawUI()
+    local ok = downloadToLocal(app)
+    if ok then setStatus("Installed: "..app) else setStatus("ERROR: wget failed.") end
+  end)
 end
 
 local function doUpdate()
   local app = remoteApps[selected]
-  if not app then return end
-  if not existsLocal(app) then
-    setStatus("Not installed.")
-    return
-  end
-  setStatus("Updating "..app.." ...")
-  drawUI()
-  local ok = downloadToLocal(app)
-  if ok then setStatus("Updated: "..app) else setStatus("ERROR: Update failed.") end
+  if not app then setStatus("No app selected.") return end
+  if not existsLocal(app) then setStatus("Not installed.") return end
+
+  safe(function()
+    setStatus("Updating "..app.." ...")
+    drawUI()
+    local ok = downloadToLocal(app)
+    if ok then setStatus("Updated: "..app) else setStatus("ERROR: wget failed.") end
+  end)
 end
 
 local function doDelete()
   local app = remoteApps[selected]
-  if not app then return end
-  if not existsLocal(app) then
-    setStatus("Not installed.")
-    return
-  end
-  setStatus("Deleting "..app.." ...")
-  drawUI()
-  deleteLocal(app)
-  setStatus("Deleted: "..app)
+  if not app then setStatus("No app selected.") return end
+  if not existsLocal(app) then setStatus("Not installed.") return end
+
+  safe(function()
+    setStatus("Deleting "..app.." ...")
+    drawUI()
+    deleteLocal(app)
+    setStatus("Deleted: "..app)
+  end)
 end
 
 -- ---------- Start ----------
@@ -326,13 +336,11 @@ while true do
   elseif ev == "mouse_click" then
     local x, y = e[3], e[4]
 
-    -- click list
     if x >= listX1 and x <= listX2 and y >= listY1 and y < listY1 + listH then
       local idx = (y - listY1 + 1) + scroll
       if remoteApps[idx] then selected = idx end
     end
 
-    -- buttons
     local bx = rightX
     local by = 10
     local cur = remoteApps[selected]
@@ -358,10 +366,10 @@ while true do
       clear(colors.black)
       break
     elseif k == keys.up then
-      selected = clamp(selected - 1, 1, #remoteApps)
+      selected = clamp(selected - 1, 1, math.max(1, #remoteApps))
       if selected < scroll + 1 then scroll = scroll - 1 end
     elseif k == keys.down then
-      selected = clamp(selected + 1, 1, #remoteApps)
+      selected = clamp(selected + 1, 1, math.max(1, #remoteApps))
       if selected > scroll + listH then scroll = scroll + 1 end
     end
   end
