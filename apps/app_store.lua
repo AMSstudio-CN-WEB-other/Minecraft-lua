@@ -1,13 +1,13 @@
--- Stable App Store for CC:Tweaked / ComputerCraft
--- Features: Install / Update / Delete / Refresh
+-- App Store (no shell dependency) for CC:Tweaked / ComputerCraft
+-- Install / Update / Delete / Refresh
 -- Supports subdirectories under /apps (e.g. games/dodge.lua)
--- Uses http.get for robust downloads + atomic replace (temp file then move)
+-- Uses http.get for robust downloads + atomic replace
 
 local REPO_USER = "Ace-2778"
 local REPO_NAME = "Minecraft-lua"
 local BRANCH    = "main"
 
-local APPS_DIR  = shell.resolve("apps")
+local APPS_DIR  = "/apps"
 local INDEX_URL = ("https://raw.githubusercontent.com/%s/%s/%s/apps/index.txt")
   :format(REPO_USER, REPO_NAME, BRANCH)
 
@@ -55,7 +55,6 @@ local function deleteLocal(relPath)
 end
 
 -- Robust download: http.get -> write file
--- Returns: ok(boolean), err(string)
 local function downloadUrlToFile(url, dst)
   local res, err = http.get(url, { ["User-Agent"] = "CCT-AppStore" })
   if not res then
@@ -66,7 +65,7 @@ local function downloadUrlToFile(url, dst)
   if code ~= 200 then
     local body = res.readAll() or ""
     res.close()
-    return false, ("HTTP " .. tostring(code) .. " " .. (body:sub(1, 60)))
+    return false, ("HTTP " .. tostring(code) .. " " .. body:sub(1, 80))
   end
 
   local data = res.readAll()
@@ -77,7 +76,6 @@ local function downloadUrlToFile(url, dst)
   end
 
   ensureParentDirs(dst)
-
   local h = fs.open(dst, "wb")
   if not h then
     return false, "Cannot open dst for write: " .. dst
@@ -87,14 +85,12 @@ local function downloadUrlToFile(url, dst)
   return true, nil
 end
 
--- Atomic install/update:
--- download to temp, only replace on success
+-- Atomic install/update: download to .tmp then replace
 local function atomicDownload(relPath)
   local url = remoteUrl(relPath)
   local dst = localPath(relPath)
   local tmp = dst .. ".tmp"
 
-  -- download to tmp first
   if fs.exists(tmp) then fs.delete(tmp) end
   local ok, err = downloadUrlToFile(url, tmp)
   if not ok then
@@ -102,7 +98,6 @@ local function atomicDownload(relPath)
     return false, err
   end
 
-  -- replace
   if fs.exists(dst) then fs.delete(dst) end
   fs.move(tmp, dst)
   return true, nil
@@ -110,23 +105,21 @@ end
 
 -- ---------- Fetch remote index ----------
 local function fetchIndex()
-  local ok, errOrTxt = pcall(function()
-    local res, err = http.get(INDEX_URL, { ["User-Agent"] = "CCT-AppStore" })
-    if not res then return nil, ("http.get failed: " .. tostring(err)) end
-    local code = res.getResponseCode and res.getResponseCode() or 200
-    local txt = res.readAll() or ""
-    res.close()
-    if code ~= 200 then return nil, ("HTTP " .. tostring(code) .. " " .. txt:sub(1, 60)) end
-    if txt == "" then return nil, "Index empty" end
-    return txt, nil
-  end)
-
-  if not ok then
-    return nil, "fetchIndex crash: " .. tostring(errOrTxt)
+  local res, err = http.get(INDEX_URL, { ["User-Agent"] = "CCT-AppStore" })
+  if not res then
+    return nil, "Index http.get failed: " .. tostring(err)
   end
 
-  local txt, err = errOrTxt[1], errOrTxt[2]
-  if not txt then return nil, err end
+  local code = res.getResponseCode and res.getResponseCode() or 200
+  local txt = res.readAll() or ""
+  res.close()
+
+  if code ~= 200 then
+    return nil, "Index HTTP " .. tostring(code) .. " " .. txt:sub(1, 80)
+  end
+  if txt == "" then
+    return nil, "Index empty"
+  end
   return txt, nil
 end
 
@@ -212,20 +205,20 @@ local function drawUI()
   clear(colors.black)
 
   drawBox(1,1,w,3,colors.blue)
-  centerText(2,"🛒 App Store (Stable)",colors.white,colors.blue)
+  centerText(2,"🛒 App Store (Stable / No shell)",colors.white,colors.blue)
 
-  writeAt(2,4,"Local: "..APPS_DIR.."  |  Remote index: index.txt",colors.yellow,colors.black)
+  writeAt(2,4,"Local: "..APPS_DIR.."  |  Remote: index.txt",colors.yellow,colors.black)
 
   drawBox(1,5,listX2+1,h-2,colors.black)
 
   local count = #remoteApps
-  if count == 0 then
-    writeAt(2,6,"(No apps loaded. Click Refresh.)",colors.lightGray,colors.black)
-  end
-
   local maxScroll = math.max(0, count - listH)
   scroll = clamp(scroll, 0, maxScroll)
   selected = clamp(selected, 1, math.max(1, count))
+
+  if count == 0 then
+    writeAt(2,6,"(No apps loaded. Click Refresh.)",colors.lightGray,colors.black)
+  end
 
   for i=1,listH do
     local idx = i + scroll
@@ -311,11 +304,7 @@ local function doInstall()
   drawUI()
 
   local ok, err = atomicDownload(app)
-  if ok then
-    setStatus("Installed: "..app)
-  else
-    setStatus("Install failed: "..tostring(err))
-  end
+  setStatus(ok and ("Installed: "..app) or ("Install failed: "..tostring(err)))
 end
 
 local function doUpdate()
@@ -327,11 +316,7 @@ local function doUpdate()
   drawUI()
 
   local ok, err = atomicDownload(app)
-  if ok then
-    setStatus("Updated: "..app)
-  else
-    setStatus("Update failed: "..tostring(err))
-  end
+  setStatus(ok and ("Updated: "..app) or ("Update failed: "..tostring(err)))
 end
 
 local function doDelete()
@@ -381,15 +366,10 @@ while true do
     local canUpdate  = cur ~= nil and installed
     local canDelete  = cur ~= nil and installed
 
-    local wInstall = #"Install" + 2
-    local wUpdate  = #"Update" + 2
-    local wDelete  = #"Delete" + 2
-    local wRefresh = #"Refresh" + 2
-
-    if inside(x,y,bx,by,wInstall,1) and canInstall then doInstall() end
-    if inside(x,y,bx,by+2,wUpdate,1) and canUpdate then doUpdate() end
-    if inside(x,y,bx,by+4,wDelete,1) and canDelete then doDelete() end
-    if inside(x,y,bx,by+6,wRefresh,1) then refreshRemote() end
+    if inside(x,y,bx,by,#"Install"+2,1) and canInstall then doInstall() end
+    if inside(x,y,bx,by+2,#"Update"+2,1) and canUpdate then doUpdate() end
+    if inside(x,y,bx,by+4,#"Delete"+2,1) and canDelete then doDelete() end
+    if inside(x,y,bx,by+6,#"Refresh"+2,1) then refreshRemote() end
 
   elseif ev == "key" then
     local k = e[2]
